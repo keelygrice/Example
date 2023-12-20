@@ -1,0 +1,513 @@
+---
+title: "Github2023"
+author: "Keely Grice"
+date: "12/20/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library('tidyverse')
+library('stargazer')
+library('sandwich')
+```
+
+## WHI Data
+```{r}
+whi <- read.csv('whidata.csv')
+#Making a Balance Table
+trt1 <- subset(whi, treat == 1)
+con1 <- subset(whi, treat == 0)
+
+trt1 <- trt1 %>%
+  group_by(age) %>%
+  summarise(n())
+
+con1 <- con1 %>%
+  group_by(age) %>%
+  summarise(n())
+
+treat_df <- data.frame(
+  Group = c("50-59", "60-69", "70-79"),
+  Treatment = trt1$`n()`,
+  Control=con1$`n()`)
+
+stargazer(t(treat_df),
+          type = "text",  
+          title = "Comparison for Treatment by Age",
+          digits = 2,
+          summary = FALSE)
+
+#Data Analysis
+mean(whi$breastcancer[whi$treat==1]) - mean(whi$breastcancer[whi$treat==0])
+#Treated women have a .51% higher incidence of breast cancer than untreated women in this study.
+
+#Confidence Interval for Bootstrapped Mean Difference
+set.seed(122)
+n_ite <- 1000
+tau_treat <- rep(NA, n_ite)
+n_sample <- nrow(whi)
+
+for(i in 1:n_ite){
+  index_bs <- sample(1:n_sample, replace = T)
+  df_bs <- whi[index_bs, ]
+  tau_treat[i] <- mean(df_bs$breastcancer[df_bs$treat==1])-mean(df_bs$breastcancer[df_bs$treat==0])}
+mean(tau_treat)
+quantile(tau_treat, c(0.025, 0.975))
+
+#Treatement Effect Based on Age
+low_age <- whi %>%
+  filter(age=="50-59")
+mean(low_age$breastcancer[low_age$treat==1]) - mean(low_age$breastcancer[low_age$treat==0])
+
+med_age <- whi %>%
+  filter(age=='60-69')
+mean(med_age$breastcancer[med_age$treat==1]) - mean(med_age$breastcancer[med_age$treat==0])
+
+high_age <- whi %>%
+  filter(age=='70-79')
+mean(high_age$breastcancer[high_age$treat==1]) - mean(high_age$breastcancer[high_age$treat==0])
+
+#Bootstrapped Treatment Effect Based on Age
+set.seed(679)
+n_ite <- 1000
+tau_treat1 <- rep(NA, n_ite)
+n_sample <- nrow(whi)
+tau_fifty=c()
+tau_sixty=c()
+tau_seventy=c()
+
+for(i in 1:n_ite){
+  index_bs <- sample(1:n_sample, replace=T)
+  df_bs<- whi[index_bs, ]
+  if (df_bs$age[i] == '50-59'){
+    a <- mean(df_bs$breastcancer[df_bs$treat ==1])-mean(df_bs$breastcancer[df_bs$treat==0])
+    tau_fifty <- append(tau_fifty, a)
+  }
+  else if (df_bs$age[i] == '60-69'){
+    b <- mean(df_bs$breastcancer[df_bs$treat ==1])-mean(df_bs$breastcancer[df_bs$treat==0])
+    tau_sixty <- append(tau_sixty, b)
+  }
+  else {
+    c <- mean(df_bs$breastcancer[df_bs$treat ==1])-mean(df_bs$breastcancer[df_bs$treat==0])
+    tau_seventy <- append(tau_seventy, c)
+  }
+}
+
+quantile(tau_fifty, c(0.025, 0.975))
+quantile(tau_sixty, c(0.025, 0.975))
+quantile(tau_seventy, c(0.025, 0.975))
+
+#Regression Analysis
+whi <- whi %>% mutate(fifties=ifelse(whi$age == '50-59', 1, 0),
+                      sixties = ifelse(whi$age == '60-69', 1, 0),
+                      seventies = ifelse(whi$age == '70-79', 1, 0)
+)
+
+#Additive Regression
+lm_whi <- lm(breastcancer~treat + sixties+ seventies, data=whi)
+
+#Reference category: 50-59
+mean(low_age$breastcancer[low_age$treat==0])
+stargazer(lm_whi,
+          covariate.labels = c("Treatment", "60-69", "70-79"),
+          title = "Breast Cancer", type = "text")
+
+#Interactive Regression
+lm_whi2 <- lm(breastcancer~treat + sixties+ seventies + treat*sixties + treat*seventies, data=whi)
+
+stargazer(lm_whi, lm_whi2,
+          covariate.labels = c("Treatment", "60-69", "70-79", "Treatment:60-69", "Treatment:70-79"),
+          title = "Breast Cancer", type = "text")
+```
+The calculated mean differences are extremely similar to the interactive regression differences. However, the additive is less similar, especially for the age group 70-79 where it underestimates considerably. The interactive regression seems to be a better calculation for the average treatment effect than the additive.
+
+## California CPS Data
+```{r}
+cps <- read.csv("California_CPS_degrees.csv")
+
+add_cps <- lm(income ~ education + age, data =cps)
+
+stargazer(add_cps,
+          covariate.labels = c("Education", "Age"),
+          title = "Income for People Ages 20-35", type = "text")
+
+#The standard deviation for these values assumes homoskedasticity, which may not be true.
+df.mat <- data.frame(constant=rep(1, length (cps$income)), education = cps$education,
+                     age=cps$age)
+X<- data.matrix(df.mat)
+Y <- cps$income
+
+betas <- solve(t(X)%*%X)%*%t(X)%*%Y
+print(betas)
+#These Betas match the results from the additive linear regression. This represents an alternate way to find the relationships between the covariates and the treatment. 
+
+predicted<- predict(add_cps)
+residual_cps <- residuals(add_cps)
+
+plot(predict(add_cps), residuals(add_cps))
+```
+The data seems to be heteroskedastic because the larger income values seem to have a greater variance. Furthermore, there are a greater number of data points in the middle, which is lowering the variance.
+A more accuraete estimate of the standard deviation can be found in a few different ways.
+
+```{r}
+#The standard deviation for each beta value using sandwhich
+sand <- sandwich(add_cps)
+robust_se <- sqrt(diag(sand))
+print(robust_se)
+
+#Standard deviation for each beta using matrix multiplication.
+solve(t(X)%*%X)%*%t(X)%*%diag(as.vector((as.vector(Y)-X%*%as.vector(betas)))*as.vector((as.vector(Y)-X%*%as.vector(betas))))%*%X%*%solve(t(X)%*%X)
+
+matrix_sand<- solve(t(X)%*%X)%*%t(X)%*%diag(as.vector((as.vector(Y)-X%*%as.vector(betas)))*as.vector((as.vector(Y)-X%*%as.vector(betas))))%*%X%*%solve(t(X)%*%X)
+print(sqrt(diag(matrix_sand)))
+
+#Bootstrap for beta standard deviation
+beta_bs = 0
+beta_0 = 0
+beta_1 = 0
+beta_2 = 0 
+
+set.seed(6692)
+for (i in 1:10000) {
+  bs_ind <- sample(1:2246, replace=TRUE)
+  df_bs <- cps[bs_ind, ]
+  beta_bs <- lm(income ~ education + age, data=df_bs)
+  beta_0[i] <- beta_bs$coefficient[1]
+  beta_1[i] <- beta_bs$coefficient[2]
+  beta_2[i] <- beta_bs$coefficient[3]
+}
+
+#New standard deviation calculation for divided by n, not n-1. Because the sample is so large, the new calculation is more standard. 
+standiv <- function(x) {
+  mean <- mean(x)
+  vector <- length(x)
+  for(i in 1:length(x)){
+    vector[i] <- (x[i]-mean)**2
+  }
+  division <- sum(vector)/length(x)
+  answer <- division**.5
+  print (answer)
+}
+
+sd(beta_0)
+sd(beta_1)
+sd(beta_2)
+```
+## Neto and Cox
+
+```{r}
+nc<- read.csv("netocox.csv")
+
+#Balance table for ethnic groups
+treat <- subset(nc, RUNOFF == 1)
+control <- subset(nc, RUNOFF == 0)
+
+mean_treat <- mean(treat$ENETH)
+mean_control <- mean(control$ENETH)
+
+balance <- data.frame(
+  Group = c("No_Runoff", "Runoff"),
+  Ethnic = c(mean_control, mean_treat))
+
+stargazer(balance,
+          type = "text",  
+          title = "Comparison for Pre-treatment Covariates",
+          digits = 2,
+          summary = FALSE)
+
+#Additive linear regression
+neto_add<- lm(ENPRES ~ RUNOFF + ENETH, data=nc)
+summary(neto_add)
+
+#Calculating APD
+neto<- nc
+neto$RUNOFF <- ifelse(neto$RUNOFF ==1, 0, 1)
+neto$Additive_Predicted <- predict(neto_add, newdata = neto)
+
+neto_inverse <- data.frame(
+  "Country" = nc$COUNTRY,
+  "Runoff" = nc$RUNOFF
+)
+
+neto_inverse$Y0 <- ifelse(neto$RUNOFF == 0, neto$Additive_Predicted, neto$ENPRES)
+neto_inverse$Y1 <- ifelse(neto$RUNOFF ==0, neto$ENPRES, neto$Additive_Predicted)
+
+neto_inverse$Treatment_Effect_Add <- neto_inverse$Y1 - neto_inverse$Y0
+
+mean(neto_inverse$Treatment_Effect_Add)
+#APD = 0.631
+print(neto_add)
+```
+The calculated APD for the additive model is 0.631. Alternatively, the APD can be found from the partial derivative of the additive model (with respect to treatment). In this case, this is Beta 1 = 0.631.
+
+```{r}
+#APD from interactive model
+lm(ENPRES ~ RUNOFF + ENETH + RUNOFF:ENETH, data=nc)
+
+neto_int <- lm(ENPRES ~ RUNOFF + ENETH + RUNOFF:ENETH, data=nc)
+summary(neto_int)
+
+neto<- nc
+neto$RUNOFF <- ifelse(neto$RUNOFF ==1, 0, 1)
+neto$Interactive_Predicted <- predict(neto_int, newdata = neto)
+
+neto_inverse <- data.frame(
+  "Country" = nc$COUNTRY,
+  "Runoff" = nc$RUNOFF
+)
+
+neto_inverse$Y0 <- ifelse(neto$RUNOFF == 0, neto$Interactive_Predicted, neto$ENPRES)
+neto_inverse$Y1 <- ifelse(neto$RUNOFF ==0, neto$ENPRES, neto$Interactive_Predicted)
+
+neto_inverse$Treatment_Effect <- neto_inverse$Y1 - neto_inverse$Y0
+mean(neto_inverse$Treatment_Effect)
+
+#Alternative method: 
+#APD = B1 + B3(ENETH)
+apd_int <- -2.4911 + 2.0054*nc$ENETH
+mean(apd_int)
+#APD = 0.673
+
+#Further treatment effect calculations:
+ATE <- mean(neto_inverse$Treatment_Effect)
+ATT <- mean(neto_inverse$Treatment_Effect[neto_inverse$Runoff ==1])
+ATC <- mean(neto_inverse$Treatment_Effect[neto_inverse$Runoff==0])
+
+print(ATE)
+print(ATT)
+print(ATC)
+
+#APD for interactive polynomial model
+nc$ENETH_SQ <- nc$ENETH**2
+poly <- lm(ENPRES ~ RUNOFF + ENETH + RUNOFF * ENETH + ENETH_SQ + RUNOFF*ENETH_SQ, data = nc)
+
+neto<- nc
+neto$RUNOFF <- ifelse(neto$RUNOFF ==1, 0, 1)
+neto$Poly_Predicted <- predict(poly, newdata = neto)
+
+neto_poly <- data.frame(  
+  "Country" = nc$COUNTRY,  
+  "Runoff" = nc$RUNOFF)
+
+neto_poly$Y0 <- ifelse(neto$RUNOFF == 0, neto$Poly_Predicted, neto$ENPRES)
+neto_poly$Y1 <- ifelse(neto$RUNOFF == 0, neto$ENPRES, neto$Poly_Predicted)
+neto_poly$Treatment_Effect <- neto_poly$Y1 - neto_poly$Y0
+
+mean(neto_poly$Treatment_Effect)
+
+#APD (with respect to RUNOFF) = B1 + B3(ENETH) + B5(ENETH^2)
+print(poly)
+apd_poly <- -19.568 + 23.950*nc$ENETH + -6.019*nc$ENETH_SQ
+mean(apd_poly)
+#APD = 0.991
+```
+
+## Gerber Voter Experiment
+```{r}
+gerber <- read.csv('GerberGreenLarimer_APSR_2008_social_pressure.csv')
+
+gerber <- gerber %>% mutate(female = ifelse(sex == "male", 0, 1), age = 2006-yob, treated= ifelse(gerber$treatment!=" Control", 1, 0), outcome = ifelse(gerber$voted=="Yes", 1, 0))
+
+#Balance Table for Treatment versus Control
+trt <- subset(gerber, treated == 1)
+con <- subset(gerber, treated == 0)
+mean_treated_num <- sapply(trt[, c("female", "age", "hh_size")], mean)
+mean_control_num <- sapply(con[, c("female", "age", "hh_size")], mean)
+
+mean_treated_bin <- sapply(trt[, c("g2000", "g2002", "g2004", "p2000", "p2002", "p2004")], function(x) mean(x %in% c("yes", "Yes")))
+mean_control_bin <- sapply(con[, c("g2000", "g2002", "g2004", "p2000", "p2002", "p2004")], function(x) mean(x %in% c("yes", "Yes")))
+
+comparison_df1 <- data.frame(
+  Group = c("Treated", "Control"),
+  Female = c(mean_treated_num['female'], mean_control_num['female']),
+  Age = c(mean_treated_num['age'], mean_control_num['age']),
+  Household_size = c(mean_treated_num['hh_size'], mean_control_num['hh_size']),
+  General2000 = c(mean_treated_bin['g2000'], mean_control_bin['g2000']),
+  General2002 = c(mean_treated_bin['g2002'], mean_control_bin['g2002']),
+  Primary2000 = c(mean_treated_bin['p2000'], mean_control_bin['p2000']),
+  Primary2002 = c(mean_treated_bin['p2002'], mean_control_bin['p2002']),
+  Primary2004 = c(mean_treated_bin['p2004'], mean_control_bin['p2004']),
+  N = c(nrow(trt),nrow(con))
+)
+stargazer(t(comparison_df1),
+          type = "text",  
+          title = "Comparison for Pre-treatment Covariates",
+          digits = 2,
+          summary = FALSE)
+
+#Balance Table for Treatment Type Assignment
+civic <- subset(gerber, treatment == " Civic Duty")
+haw <- subset(gerber, treatment == " Hawthorne")
+self <- subset(gerber, treatment == " Self")
+neib <- subset(gerber, treatment == " Neighbors")
+
+mean_civic_num <- sapply(civic[, c("female", "age", "hh_size")], mean)
+mean_haw_num <- sapply(haw[, c("female", "age", "hh_size")], mean)
+mean_self_num <- sapply(self[, c("female", "age", "hh_size")], mean)
+mean_neib_num <- sapply(neib[, c("female", "age", "hh_size")], mean)
+
+mean_civic_bin <- sapply(civic[, c("g2000", "g2002", "g2004", "p2000", "p2002", "p2004")], function(x) mean(x %in% c("yes", "Yes")))
+mean_haw_bin <- sapply(haw[, c("g2000", "g2002", "g2004", "p2000", "p2002", "p2004")], function(x) mean(x %in% c("yes", "Yes")))
+mean_self_bin <- sapply(self[, c("g2000", "g2002", "g2004", "p2000", "p2002", "p2004")], function(x) mean(x %in% c("yes", "Yes")))
+mean_neib_bin <- sapply(neib[, c("g2000", "g2002", "g2004", "p2000", "p2002", "p2004")], function(x) mean(x %in% c("yes", "Yes")))
+
+comparison_df2 <- data.frame(
+  Group = c("Civic Duty", "Hawthorne", "Self", "Neighbors", "Control"),
+  Female = c(mean_civic_num['female'], mean_haw_num['female'], mean_self_num['female'], mean_neib_num['female'],mean_control_num['female']),
+  Age = c(mean_civic_num['age'], mean_haw_num['age'], mean_self_num['age'], mean_neib_num['age'], mean_control_num['age']),
+  Household_size = c(mean_civic_num['hh_size'], mean_haw_num['hh_size'], mean_self_num['hh_size'], mean_neib_num['hh_size'], mean_control_num['hh_size']),
+  General2000 = c(mean_civic_bin['g2000'], mean_haw_bin['g2000'], mean_self_bin['g2000'], mean_neib_bin['g2000'], mean_control_bin['g2000']),
+  General2002 = c(mean_civic_bin['g2002'], mean_haw_bin['g2002'], mean_self_bin['g2002'], mean_neib_bin['g2002'], mean_control_bin['g2002']),
+  Primary2000 = c(mean_civic_bin['p2000'], mean_haw_bin['p2000'], mean_self_bin['p2000'], mean_neib_bin['p2000'], mean_control_bin['p2000']),
+  Primary2002 = c(mean_civic_bin['p2002'], mean_haw_bin['p2002'], mean_self_bin['p2002'], mean_neib_bin['p2002'], mean_control_bin['p2002']),
+  Primary2004 = c(mean_civic_bin['p2004'], mean_haw_bin['p2004'], mean_self_bin['p2004'], mean_neib_bin['p2004'], mean_control_bin['p2004']),
+  N = c(nrow(civic), nrow(haw), nrow(self), nrow(neib), nrow(con))
+)
+stargazer(t(comparison_df2),
+          type = "text",  
+          title = "Comparison for Pre-treatment Covariates",
+          digits = 2,
+          summary = FALSE)
+
+#Voter Turnout for each treatment
+civic <- civic %>%
+  mutate(osix = ifelse(voted=="Yes", 1, 0))
+
+haw <- haw %>%
+  mutate(osix = ifelse(voted== "Yes", 1, 0))
+
+self <- self %>%
+  mutate(osix = ifelse(voted== "Yes", 1, 0))
+
+neib <- neib %>%
+  mutate(osix = ifelse(voted== "Yes", 1, 0))
+
+con <- con %>%
+  mutate(osix = ifelse(voted== "Yes", 1, 0))
+
+means_df2 <- data.frame(
+  Group = c("Civic Duty", "Hawthorne", "Self", "Neighbors", "Control"),
+  Voter_Turnout = c(mean(civic$osix), mean(haw$osix), mean(self$osix), mean(neib$osix), mean(con$osix))
+)
+stargazer(t(means_df2),
+          type = "text",  
+          title = "2006 Primary Turnout for Covariates",
+          digits = 2,
+          summary = FALSE)
+
+#Treatment effect for each treatment
+gerber <- gerber %>% mutate(civic = ifelse(treatment == " Civic Duty", 1, 0), haw = ifelse(treatment == " Hawthorne", 1, 0), self = ifelse(treatment == " Self", 1, 0), neib = ifelse(treatment == " Neighbors", 1, 0))
+
+mu_hat_control <- mean(gerber$outcome[gerber$treated==0])
+mu_hat_civic <- mean(gerber$outcome[gerber$civic==1])
+mu_hat_haw <- mean(gerber$outcome[gerber$haw==1])
+mu_hat_self <- mean(gerber$outcome[gerber$self==1])
+mu_hat_neib <- mean(gerber$outcome[gerber$neib==1])
+
+mu_hat_civic - mu_hat_control
+mu_hat_haw - mu_hat_civic
+mu_hat_self - mu_hat_haw
+mu_hat_neib - mu_hat_self
+```
+The civic treatment effect is a 1.79% increase from no treatment in voter turnout for the 2006 election. The hawthorne treatment effect is a .78% increase from civic treatment in voter turnout for the 2006 election. The self treatment effect is a 2.28% increase from the hawthorne treatment in voter turnout for the 2006 election. The neighbor treatment effect is a 3.28% increase from the self treatment in voter turnout for the 2006 election.
+
+```{r}
+#Bootstrapped treatment effect
+set.seed(9090)
+n_ite <- 1000
+tau_neib <- rep(NA, n_ite)
+tau_self <- rep(NA, n_ite)
+tau_haw <- rep(NA, n_ite)
+tau_civic <- rep(NA, n_ite)
+n_sample <- nrow(gerber)
+
+for(i in 1:n_ite){
+  index_bs <- sample(1:n_sample, replace = T)
+  df_bs <- gerber[index_bs, ]
+  tau_neib[i] <- mean(df_bs$outcome[df_bs$neib==1])-mean(df_bs$outcome[df_bs$self==1])
+  tau_self[i] <- mean(df_bs$outcome[df_bs$self==1])-mean(df_bs$outcome[df_bs$haw==1])
+  tau_haw[i] <- mean(df_bs$outcome[df_bs$haw==1])-mean(df_bs$outcome[df_bs$civic==1])
+  tau_civic[i] <- mean(df_bs$outcome[df_bs$civic==1])-mean(df_bs$outcome[df_bs$treated==0])
+}
+tau_quantiles <- t(sapply(list(tau_neib, tau_self, tau_haw, tau_civic), function(x) quantile(x, c(0.025, 0.975))))
+bootstrap_df <- data.frame(tau_quantiles[,1], tau_quantiles[,2],sapply(list(tau_neib, tau_self, tau_haw, tau_civic),mean))
+colnames(bootstrap_df) <- c("Lower Bound", "Upper Bound", "Mean")
+rownames(bootstrap_df) <- c("Neighbors", "Self", "Hawthorne", "Civic")
+bootstrap_df
+
+#Additive linear regression
+gerber <- gerber%>%mutate(civic_num = ifelse(gerber$treatment == " Civic Duty", 1,0),
+                          haw_num = ifelse(gerber$treatment == " Hawthorne", 1,0),
+                          self_num = ifelse(gerber$treatment == " Self", 1,0),
+                          neib_num = ifelse(gerber$treatment == " Neighbors", 1,0))
+
+gerber <- gerber %>%
+  mutate(osix = ifelse(voted== "Yes", 1, 0))
+
+lm1 <- lm(osix ~ civic_num + haw_num + self_num + neib_num, data = gerber)
+
+stargazer(lm1,
+          covariate.labels = c("Civic", "Hawthorne", "Self", "Neighbor"),
+          title = "2006 Voting", type = "text")
+```
+The typical American not receiving a treatment will vote in the 2006 election 29.7% of the time (or more accurately, 29.7% of Americans will vote without a treatment). This percent increases by 1.8 with the Civic treatment, by 2.6 with the Hawthorne treatment, by 4.9 with the self treatment, or 8.1 with the neighbor treatment (from the control).
+
+```{r}
+#Expanded additive linear regression
+gerber <- gerber%>%mutate(p2000_num = ifelse(gerber$p2000 == "yes", 1,0),
+                          p2002_num = ifelse(gerber$p2002 == "yes", 1,0),
+                          p2004_num = ifelse(gerber$p2004 == "Yes", 1,0),
+                          g2000_num = ifelse(gerber$g2000 == "yes", 1,0),
+                          g2002_num = ifelse(gerber$g2002 == "yes", 1,0))
+
+lm2 <- lm(osix ~ civic_num + haw_num + self_num + neib_num + p2000_num + p2002_num + p2004_num + g2000_num + g2002_num, data = gerber)
+
+stargazer(lm1, lm2,
+          covariate.labels = c("Civic", "Hawthorne", "Self", "Neighbor", "2000 Primary", "2004 Primary", "2002 Primary", "General 2000", "General 2002"),
+          title = "2006 Voting", type = "text")
+
+```
+The values are similar between the two regressions. There is only a minute difference between the two regression for the Hawthorne and Self Treatments.
+
+## Dogs
+```{r}
+dogs <- read.csv('dogs.csv')
+
+#Graph of weight based on gender and fixed status
+dogs$Gender[dogs$Gender == "Male"] <- 0
+dogs$Gender[dogs$Gender == "Female"] <- 1
+
+dogs$Fixed[dogs$Fixed=='No'] <- 0
+dogs$Fixed[dogs$Fixed=='Yes'] <- 1
+dogs$Fixed[dogs$Fixed=='']<- NA
+
+dogs %>%
+  drop_na() %>%
+  ggplot(aes(x=Fixed, y= Weight))+
+  geom_point(aes(color=Gender), position='jitter')+
+  labs(title= 'Dog Weight by Gender and Fixed') +
+  scale_color_discrete(labels=c('Male', 'Female'))
+
+
+#Linear Regressions
+lm_add <- lm(Weight~Gender + Fixed, data=dogs)
+
+lm_gender <- lm(Weight ~ Gender, data=dogs)
+lm_fixed <- lm(Weight~ Fixed, data=dogs)
+lm_interactive <- lm(Weight~Gender + Fixed+ Gender*Fixed, data=dogs)
+
+stargazer(lm_add, lm_interactive,
+          covariate.labels = c("Gender", "Fixed", "Gender:Fixed"),
+          title = "Dogs Weight", type = "text")
+
+#Comparison with sample data means
+mean(dogs$Weight[dogs$Gender==1 & dogs$Fixed==1], na.rm=TRUE)
+mean(dogs$Weight[dogs$Gender==1 & dogs$Fixed==0], na.rm=TRUE)
+mean(dogs$Weight[dogs$Gender==0 & dogs$Fixed==1], na.rm=TRUE)
+mean(dogs$Weight[dogs$Gender==0 & dogs$Fixed==0], na.rm=TRUE)
+
+```
